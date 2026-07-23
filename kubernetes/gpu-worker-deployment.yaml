@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cineforge-gpu-worker
+  namespace: cineforge
+  labels:
+    app: cineforge-gpu-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cineforge-gpu-worker
+  template:
+    metadata:
+      labels:
+        app: cineforge-gpu-worker
+    spec:
+      containers:
+      - name: gpu-worker
+        image: cineforge-gpu-worker:latest
+        command: ["celery", "-A", "fastapi_service.pipeline.celery_app", "worker", "-Q", "gpu", "--concurrency=1", "-l", "info"]
+        resources:
+          limits:
+            nvidia.com/gpu: 1 # Requests 1 NVIDIA GPU allocation
+            memory: 8Gi
+            cpu: "4"
+          requests:
+            nvidia.com/gpu: 1
+            memory: 4Gi
+            cpu: "2"
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-secrets
+              key: database-url
+        - name: REDIS_URL
+          value: "redis://cineforge-redis:6379/0"
+        - name: REPLICATE_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: ai-api-secrets
+              key: replicate-token
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-api-secrets
+              key: openai-key
+        volumeMounts:
+        - name: shared-media-storage
+          mountPath: /code/storage
+      volumes:
+      - name: shared-media-storage
+        persistentVolumeClaim:
+          claimName: shared-media-pvc
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cineforge-gpu-worker-hpa
+  namespace: cineforge
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cineforge-gpu-worker
+  minReplicas: 0 # Autoscaling scales down to zero when idle
+  maxReplicas: 5
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: celery_queue_depth
+        selector:
+          matchLabels:
+            queue: gpu
+      target:
+        type: Value
+        value: "1" # Spawns a worker pod per enqueued GPU task (limit 5)

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+
+# Node / JS
+node_modules/
+dist/
+build/
+.eslintcache
+
+# Project storage (local temporary generated media files)
+storage/
+
+# Environment configurations and secrets
+.env
+.env*.local
+
+# IDEs and System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.gemini/

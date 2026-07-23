@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: cineforge_postgres
+    environment:
+      POSTGRES_DB: cineforge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cineforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cineforge_redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  django:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    container_name: cineforge_django
+    command: python backend/manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/code
+      - media_volume:/code/storage
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgrespassword@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=cineforge.settings
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./fastapi_service/Dockerfile
+    container_name: cineforge_fastapi
+    command: uvicorn fastapi_service.main:app --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - .:/code
+      - media_volume:/code/storage
+    ports:
+      - "8001:8001"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgrespassword@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: ./fastapi_service/Dockerfile
+    container_name: cineforge_worker
+    command: celery -A fastapi_service.pipeline.celery_app worker --loglevel=info -E
+    volumes:
+      - .:/code
+      - media_volume:/code/storage
+    environment:
+      - DATABASE_URL=postgres://postgres:postgrespassword@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cineforge_frontend
+    ports:
+      - "3005:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - django
+      - fastapi
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cineforge_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - fastapi
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cineforge_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
+  media_volume:

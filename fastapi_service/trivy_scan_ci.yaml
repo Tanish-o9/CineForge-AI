@@ -1,0 +1,29 @@
+name: Container Security Scanning
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  trivy_scan:
+    name: Snyk & Trivy Container Image Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Build Docker Image
+        run: |
+          docker build -t cineforge-api:latest -f fastapi_service/Dockerfile .
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'cineforge-api:latest'
+          format: 'table'
+          exit-code: '1' # Fail CI if high/critical vulns exist
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'HIGH,CRITICAL'

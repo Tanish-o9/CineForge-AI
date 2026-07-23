@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: cineforge_postgres_prod
+    environment:
+      POSTGRES_DB: cineforge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: cineforge_redis_prod
+    restart: always
+
+  django:
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
+    container_name: cineforge_django_prod
+    command: gunicorn cineforge.wsgi:application --bind 0.0.0.0:8000 --workers 4
+    volumes:
+      - media_volume:/code/storage
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD}@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - DJANGO_SETTINGS_MODULE=cineforge.settings
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=False
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./fastapi_service/Dockerfile
+    container_name: cineforge_fastapi_prod
+    command: uvicorn fastapi_service.main:app --host 0.0.0.0 --port 8001 --workers 2
+    volumes:
+      - media_volume:/code/storage
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD}@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+    depends_on:
+      - postgres
+      - redis
+    restart: always
+
+  # CPU-bound tasks worker (video/audio composition, subtitle extraction)
+  cpu_worker:
+    build:
+      context: .
+      dockerfile: ./fastapi_service/Dockerfile
+    container_name: cineforge_cpu_worker_prod
+    command: celery -A fastapi_service.pipeline.celery_app worker -Q default,cpu --concurrency=4 -l info
+    volumes:
+      - media_volume:/code/storage
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD}@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+    depends_on:
+      - redis
+    restart: always
+
+  # GPU-bound tasks worker (Stable Diffusion generation, Whisper transcription, custom LLM routing)
+  gpu_worker:
+    build:
+      context: .
+      dockerfile: ./fastapi_service/Dockerfile
+    container_name: cineforge_gpu_worker_prod
+    command: celery -A fastapi_service.pipeline.celery_app worker -Q gpu --concurrency=1 -l info
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - media_volume:/code/storage
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD}@postgres:5432/cineforge
+      - REDIS_URL=redis://redis:6379/0
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - redis
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    container_name: cineforge_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - media_volume:/code/storage
+    depends_on:
+      - django
+      - fastapi
+    restart: always
+
+volumes:
+  postgres_prod_data:
+  media_volume:

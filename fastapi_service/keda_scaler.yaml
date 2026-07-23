@@ -1,0 +1,19 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: cineforge-video-worker-scaler
+  namespace: cineforge-saas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cineforge-video-worker
+  minReplicaCount: 0  # Scale-to-zero when no video tasks are pending
+  maxReplicaCount: 15
+  cooldownPeriod: 180
+  triggers:
+    - type: redis
+      metadata:
+        address: redis.cineforge-saas.svc.cluster.local:6379
+        listName: video_gen_tasks
+        listLength: "3"  # Scale up 1 pod for every 3 pending video assembly/encoding jobs
